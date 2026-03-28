@@ -6,6 +6,7 @@ use sail_data_source::formats::arrow::ArrowTableFormat;
 use sail_data_source::formats::avro::AvroTableFormat;
 use sail_data_source::formats::binary::BinaryTableFormat;
 use sail_data_source::formats::console::ConsoleTableFormat;
+use sail_data_source::formats::noop::NoopTableFormat;
 use sail_data_source::formats::csv::CsvTableFormat;
 use sail_data_source::formats::json::JsonTableFormat;
 use sail_data_source::formats::parquet::ParquetTableFormat;
@@ -34,6 +35,7 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     registry.register(Arc::new(SocketTableFormat))?;
     registry.register(Arc::new(RateTableFormat))?;
     registry.register(Arc::new(ConsoleTableFormat))?;
+    registry.register(Arc::new(NoopTableFormat))?;
     Ok(())
 }
 
