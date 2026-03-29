@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, ListBuilder, StringBuilder};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -77,27 +78,24 @@ impl ScalarUDFImpl for SparkSentences {
 }
 
 fn sentences_inner(arr: &ArrayRef) -> Result<ArrayRef> {
-    let string_arr = arr.as_string_opt::<i32>();
-    let large_string_arr = arr.as_string_opt::<i64>();
+    // Normalize to Utf8 to support Utf8, LargeUtf8, and Utf8View inputs.
+    let utf8_arr = cast(arr, &DataType::Utf8)?;
+    let string_arr = utf8_arr.as_string_opt::<i32>().ok_or_else(|| {
+        generic_internal_err(
+            SparkSentences::NAME,
+            "Could not downcast argument to Utf8 string array",
+        )
+    })?;
 
     let inner_builder = ListBuilder::new(StringBuilder::new());
     let mut builder = ListBuilder::new(inner_builder);
 
-    let len = arr.len();
+    let len = utf8_arr.len();
     for i in 0..len {
-        if arr.is_null(i) {
+        if utf8_arr.is_null(i) {
             builder.append_null();
         } else {
-            let text = if let Some(a) = string_arr {
-                a.value(i)
-            } else if let Some(a) = large_string_arr {
-                a.value(i)
-            } else {
-                return Err(generic_internal_err(
-                    SparkSentences::NAME,
-                    "Could not downcast argument to string array",
-                ));
-            };
+            let text = string_arr.value(i);
             let sentences = split_into_sentences(text);
             let inner = builder.values();
             for sentence_words in &sentences {
@@ -116,7 +114,7 @@ fn sentences_inner(arr: &ArrayRef) -> Result<ArrayRef> {
 
 /// Split text into sentences, then each sentence into words.
 /// Approximates Java's BreakIterator behavior:
-/// - Sentences are split on `.`, `!`, `?` followed by whitespace or end of string
+/// - Sentences are split immediately after `.`, `!`, `?`; any following whitespace is skipped
 /// - Words are sequences of Unicode letters or digits
 fn split_into_sentences(text: &str) -> Vec<Vec<String>> {
     if text.is_empty() {
