@@ -204,6 +204,7 @@ fn extract_all_matches(value: &str, re: &Regex, group_idx: i64) -> Result<Vec<Op
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::StringArray;
     use datafusion_common::Result;
@@ -221,53 +222,143 @@ mod tests {
         Ok(result.as_any().downcast_ref::<ListArray>().unwrap().clone())
     }
 
+    fn run_with_nulls(
+        values: &[Option<&str>],
+        patterns: &[Option<&str>],
+        idxs: &[Option<i64>],
+    ) -> Result<ListArray> {
+        let values_arr: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
+        let pattern_arr: ArrayRef = Arc::new(StringArray::from(patterns.to_vec()));
+        let idx_arr: ArrayRef = Arc::new(Int64Array::from(idxs.to_vec()));
+
+        let result = regexp_extract_all_inner(&[values_arr, pattern_arr, idx_arr])?;
+        Ok(result.as_any().downcast_ref::<ListArray>().unwrap().clone())
+    }
+
+    fn get_strings(result: &ListArray, row: usize) -> Vec<String> {
+        let inner = result.value(row);
+        let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
+        (0..strings.len())
+            .map(|i| strings.value(i).to_string())
+            .collect()
+    }
+
     #[test]
     fn test_basic_match() -> Result<()> {
         let result = run_regexp_extract_all(&["foo bar baz"], "(\\w+)", 1)?;
-        let inner = result.value(0);
-        let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 3);
-        assert_eq!(strings.value(0), "foo");
-        assert_eq!(strings.value(1), "bar");
-        assert_eq!(strings.value(2), "baz");
+        assert_eq!(get_strings(&result, 0), vec!["foo", "bar", "baz"]);
         Ok(())
     }
 
     #[test]
     fn test_group_zero() -> Result<()> {
         let result = run_regexp_extract_all(&["100-200, 300-400"], "(\\d+)-(\\d+)", 0)?;
-        let inner = result.value(0);
-        let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 2);
-        assert_eq!(strings.value(0), "100-200");
-        assert_eq!(strings.value(1), "300-400");
+        assert_eq!(get_strings(&result, 0), vec!["100-200", "300-400"]);
         Ok(())
     }
 
     #[test]
     fn test_capture_groups() -> Result<()> {
         let result = run_regexp_extract_all(&["100-200, 300-400"], "(\\d+)-(\\d+)", 1)?;
-        let inner = result.value(0);
-        let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 2);
-        assert_eq!(strings.value(0), "100");
-        assert_eq!(strings.value(1), "300");
+        assert_eq!(get_strings(&result, 0), vec!["100", "300"]);
 
         let result = run_regexp_extract_all(&["100-200, 300-400"], "(\\d+)-(\\d+)", 2)?;
-        let inner = result.value(0);
-        let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 2);
-        assert_eq!(strings.value(0), "200");
-        assert_eq!(strings.value(1), "400");
+        assert_eq!(get_strings(&result, 0), vec!["200", "400"]);
         Ok(())
     }
 
     #[test]
     fn test_no_match() -> Result<()> {
         let result = run_regexp_extract_all(&["hello"], "(\\d+)", 1)?;
+        assert_eq!(get_strings(&result, 0), Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_string_input() -> Result<()> {
+        let result = run_regexp_extract_all(&[""], "(\\w+)", 1)?;
+        assert_eq!(get_strings(&result, 0), Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_input_value() -> Result<()> {
+        let result = run_with_nulls(&[None], &[Some("(\\d+)")], &[Some(1)])?;
+        assert!(result.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_pattern() -> Result<()> {
+        let result = run_with_nulls(&[Some("abc")], &[None], &[Some(1)])?;
+        assert!(result.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_idx() -> Result<()> {
+        let result = run_with_nulls(&[Some("abc")], &[Some("(\\w+)")], &[None])?;
+        assert!(result.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_capture_groups() -> Result<()> {
+        // Pattern ((a)(b)) has 3 groups: 1=ab, 2=a, 3=b
+        let result = run_regexp_extract_all(&["ab ab"], "((a)(b))", 1)?;
+        assert_eq!(get_strings(&result, 0), vec!["ab", "ab"]);
+
+        let result = run_regexp_extract_all(&["ab ab"], "((a)(b))", 2)?;
+        assert_eq!(get_strings(&result, 0), vec!["a", "a"]);
+
+        let result = run_regexp_extract_all(&["ab ab"], "((a)(b))", 3)?;
+        assert_eq!(get_strings(&result, 0), vec!["b", "b"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_capture_groups_idx_zero() -> Result<()> {
+        // Pattern without groups, idx=0 returns entire match
+        let result = run_regexp_extract_all(&["100-200,300-400"], "\\d+", 0)?;
+        assert_eq!(get_strings(&result, 0), vec!["100", "200", "300", "400"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_optional_group_not_matched() -> Result<()> {
+        // Pattern (a)?(b) — when matching "b", group 1 is not captured
+        let result = run_regexp_extract_all(&["b ab"], "(a)?(b)", 1)?;
         let inner = result.value(0);
         let strings = inner.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 0);
+        // First match: "b" alone — group 1 didn't match → None
+        assert_eq!(strings.len(), 2);
+        assert!(strings.is_null(0));
+        // Second match: "ab" — group 1 matched "a"
+        assert_eq!(strings.value(1), "a");
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiple_rows() -> Result<()> {
+        let result = run_regexp_extract_all(&["abc 123", "def 456"], "(\\d+)", 1)?;
+        assert_eq!(get_strings(&result, 0), vec!["123"]);
+        assert_eq!(get_strings(&result, 1), vec!["456"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unicode_input() -> Result<()> {
+        let result = run_regexp_extract_all(&["cafe\u{0301} naive\u{0308}"], "(\\w+)", 1)?;
+        let strings = get_strings(&result, 0);
+        assert!(!strings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_greedy_vs_non_overlapping() -> Result<()> {
+        // Regex is greedy by default; "aaa" matches once as "aaa", not ["a","a","a"]
+        let result = run_regexp_extract_all(&["aaa"], "(a+)", 1)?;
+        assert_eq!(get_strings(&result, 0), vec!["aaa"]);
         Ok(())
     }
 }
