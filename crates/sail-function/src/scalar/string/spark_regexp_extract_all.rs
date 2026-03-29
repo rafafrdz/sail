@@ -108,14 +108,9 @@ fn regexp_extract_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [values_arr, pattern_arr, idx_arr] =
-        take_function_args(SparkRegexpExtractAll::NAME, args)?;
-    let values = values_arr
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>();
-    let pattern = pattern_arr
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>();
+    let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtractAll::NAME, args)?;
+    let values = values_arr.as_any().downcast_ref::<GenericStringArray<O>>();
+    let pattern = pattern_arr.as_any().downcast_ref::<GenericStringArray<O>>();
     let idx = opt_downcast_arg!(idx_arr, Int64Array);
 
     // Also try i32 pattern if O is i64
@@ -141,13 +136,17 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
 
             let mut builder = ListBuilder::new(StringBuilder::new());
             for i in 0..args[0].len() {
-                if is_pattern_null || is_idx_null || values.is_null(i) || pattern.is_null_(i) || idx.is_null(i) {
+                if is_pattern_null
+                    || is_idx_null
+                    || values.is_null(i)
+                    || pattern.is_null_(i)
+                    || idx.is_null(i)
+                {
                     builder.append_null();
                 } else {
-                    let re = pattern_scalar_opt.as_ref().map_or_else(
-                        || parse_regex(pattern.value_(i)),
-                        |re| Ok(re.clone()),
-                    )?;
+                    let re = pattern_scalar_opt
+                        .as_ref()
+                        .map_or_else(|| parse_regex(pattern.value_(i)), |re| Ok(re.clone()))?;
                     let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
                     let matches = extract_all_matches(values.value(i), &re, group_idx)?;
                     builder.append_value(matches);
@@ -186,16 +185,11 @@ impl<O: OffsetSizeTrait> StringArrayLike for GenericStringArray<O> {
 }
 
 fn parse_regex(pattern: &str) -> Result<Regex> {
-    Regex::new(pattern).map_err(|_| {
-        generic_exec_err(SparkRegexpExtractAll::NAME, "Invalid regex pattern")
-    })
+    Regex::new(pattern)
+        .map_err(|_| generic_exec_err(SparkRegexpExtractAll::NAME, "Invalid regex pattern"))
 }
 
-fn extract_all_matches(
-    value: &str,
-    re: &Regex,
-    group_idx: i64,
-) -> Result<Vec<Option<String>>> {
+fn extract_all_matches(value: &str, re: &Regex, group_idx: i64) -> Result<Vec<Option<String>>> {
     let group_idx = group_idx as usize;
     let mut results = Vec::new();
     for caps in re.captures_iter(value) {
@@ -216,16 +210,11 @@ mod tests {
 
     use super::*;
 
-    fn run_regexp_extract_all(
-        values: &[&str],
-        pattern: &str,
-        idx: i64,
-    ) -> Result<ListArray> {
+    fn run_regexp_extract_all(values: &[&str], pattern: &str, idx: i64) -> Result<ListArray> {
         let values_arr: ArrayRef = Arc::new(StringArray::from(
             values.iter().map(|s| Some(*s)).collect::<Vec<_>>(),
         ));
-        let pattern_arr: ArrayRef =
-            Arc::new(StringArray::from(vec![Some(pattern); values.len()]));
+        let pattern_arr: ArrayRef = Arc::new(StringArray::from(vec![Some(pattern); values.len()]));
         let idx_arr: ArrayRef = Arc::new(Int64Array::from(vec![Some(idx); values.len()]));
 
         let result = regexp_extract_all_inner(&[values_arr, pattern_arr, idx_arr])?;
