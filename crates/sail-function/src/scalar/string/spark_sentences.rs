@@ -27,7 +27,11 @@ impl SparkSentences {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(1), TypeSignature::String(3)],
+                vec![
+                    TypeSignature::String(1),
+                    TypeSignature::String(2),
+                    TypeSignature::String(3),
+                ],
                 Volatility::Immutable,
             ),
         }
