@@ -4,12 +4,13 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -224,6 +225,29 @@ fn in_str_out_i32(
     move |input: ScalarFunctionInput| Ok(cast(func(validate_utf8(input)?), DataType::Int32))
 }
 
+fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, format) = arguments.two()?;
+    let data_type = value.get_type(function_context.schema)?;
+    match &data_type {
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_) => {
+            let chrono_fmt = ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format]);
+            Ok(expr_fn::to_char(value, chrono_fmt))
+        }
+        _ => {
+            // For numeric and other types, cast to string.
+            Ok(cast(value, DataType::Utf8))
+        }
+    }
+}
+
 fn rev_args(
     func: impl Fn(Vec<expr::Expr>) -> expr::Expr,
 ) -> impl Fn(Vec<expr::Expr>) -> expr::Expr {
@@ -294,9 +318,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
-        ("to_char", F::unknown("to_char")),
+        ("to_char", F::custom(to_char)),
         ("to_number", F::udf(SparkToNumber::new())),
-        ("to_varchar", F::unknown("to_varchar")),
+        ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
