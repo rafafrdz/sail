@@ -169,6 +169,7 @@ fn extract_words(text: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::StringArray;
     use datafusion_common::Result;
