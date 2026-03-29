@@ -127,21 +127,30 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
 
     match (values, pattern_ref, idx.as_ref()) {
         (Some(values), Some(pattern), Some(idx)) => {
-            let pattern_scalar_opt = (pattern.len_() == 1 && pattern.is_valid_(0))
+            let pattern_len = pattern.len_();
+            let idx_len = idx.len();
+
+            let pattern_scalar_opt = (pattern_len == 1 && pattern.is_valid_(0))
                 .then(|| parse_regex(pattern.value_(0)))
                 .transpose()?;
-            let idx_scalar_opt = (idx.len() == 1 && idx.is_valid(0)).then(|| idx.value(0));
-            let is_pattern_null = pattern.len_() == 1 && pattern.is_null_(0);
-            let is_idx_null = idx.len() == 1 && idx.is_null(0);
+            let idx_scalar_opt = (idx_len == 1 && idx.is_valid(0)).then(|| idx.value(0));
+            let is_pattern_null = pattern_len == 1 && pattern.is_null_(0);
+            let is_idx_null = idx_len == 1 && idx.is_null(0);
 
             let mut builder = ListBuilder::new(StringBuilder::new());
             for i in 0..args[0].len() {
-                if is_pattern_null
-                    || is_idx_null
-                    || values.is_null(i)
-                    || pattern.is_null_(i)
-                    || idx.is_null(i)
-                {
+                let pattern_is_null = if pattern_len == 1 {
+                    is_pattern_null
+                } else {
+                    pattern.is_null_(i)
+                };
+                let idx_is_null = if idx_len == 1 {
+                    is_idx_null
+                } else {
+                    idx.is_null(i)
+                };
+
+                if pattern_is_null || idx_is_null || values.is_null(i) {
                     builder.append_null();
                 } else {
                     let re = pattern_scalar_opt
@@ -190,14 +199,16 @@ fn parse_regex(pattern: &str) -> Result<Regex> {
 }
 
 fn extract_all_matches(value: &str, re: &Regex, group_idx: i64) -> Result<Vec<Option<String>>> {
+    if group_idx < 0 {
+        return Err(generic_exec_err(
+            SparkRegexpExtractAll::NAME,
+            &format!("The group index must be non-negative, but got {group_idx}"),
+        ));
+    }
     let group_idx = group_idx as usize;
     let mut results = Vec::new();
     for caps in re.captures_iter(value) {
-        let matched = if group_idx == 0 {
-            caps.get(0).map(|m| m.as_str().to_string())
-        } else {
-            caps.get(group_idx).map(|m| m.as_str().to_string())
-        };
+        let matched = caps.get(group_idx).map(|m| m.as_str().to_string());
         results.push(matched);
     }
     Ok(results)
