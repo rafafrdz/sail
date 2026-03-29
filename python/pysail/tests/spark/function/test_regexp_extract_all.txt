@@ -1,0 +1,48 @@
+>>> spark.sql("SELECT regexp_extract_all('100-200,300-400,500-600', '(\\\\d+)-(\\\\d+)', 0) AS result").show(truncate=False)
++-------------------------------+
+|result                         |
++-------------------------------+
+|[100-200, 300-400, 500-600]    |
++-------------------------------+
+
+>>> spark.sql("SELECT regexp_extract_all('100-200,300-400,500-600', '(\\\\d+)-(\\\\d+)', 1) AS result").show(truncate=False)
++...
+|result...|
++...
+|[100, 300, 500]...|
++...
+
+>>> spark.sql("SELECT regexp_extract_all('100-200,300-400,500-600', '(\\\\d+)-(\\\\d+)', 2) AS result").show(truncate=False)
++...
+|result...|
++...
+|[200, 400, 600]...|
++...
+
+>>> spark.sql("SELECT regexp_extract_all('1a 2b 14m', '(\\\\d+)([a-z]+)') AS result").show(truncate=False)
++...
+|result...|
++...
+|[1, 2, 14]...|
++...
+
+>>> spark.sql("SELECT regexp_extract_all('foo', '(\\\\d+)', 1) AS result").show(truncate=False)
++------+
+|result|
++------+
+|[]    |
++------+
+
+>>> spark.sql("SELECT regexp_extract_all(NULL, '(\\\\d+)', 1) AS result").show(truncate=False)
++------+
+|result|
++------+
+|NULL  |
++------+
+
+>>> spark.sql("SELECT regexp_extract_all('abc', NULL, 1) AS result").show(truncate=False)
++------+
+|result|
++------+
+|NULL  |
++------+
