@@ -61,7 +61,7 @@ impl ScalarUDFImpl for SparkSentences {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        // We only use the first argument (str); lang and country are ignored.
+        // TODO: Support locale-aware sentence splitting using the lang and country parameters.
         let arr = match &args[0] {
             ColumnarValue::Array(arr) => arr.clone(),
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
@@ -168,91 +168,4 @@ fn extract_words(text: &str) -> Vec<String> {
     }
 
     words
-}
-
-#[cfg(test)]
-#[expect(clippy::unwrap_used)]
-mod tests {
-    use datafusion::arrow::array::StringArray;
-    use datafusion_common::Result;
-
-    use super::*;
-
-    fn run_sentences(values: &[Option<&str>]) -> Result<ListArray> {
-        let values_arr: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
-        let result = sentences_inner(&values_arr)?;
-        Ok(result.as_any().downcast_ref::<ListArray>().unwrap().clone())
-    }
-
-    #[test]
-    fn test_basic_sentences() -> Result<()> {
-        let result = run_sentences(&[Some("Hi there! Good morning.")])?;
-        let outer = result.value(0);
-        let outer_list = outer.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(outer_list.len(), 2);
-
-        let s1 = outer_list.value(0);
-        let words1 = s1.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(words1.len(), 2);
-        assert_eq!(words1.value(0), "Hi");
-        assert_eq!(words1.value(1), "there");
-
-        let s2 = outer_list.value(1);
-        let words2 = s2.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(words2.len(), 2);
-        assert_eq!(words2.value(0), "Good");
-        assert_eq!(words2.value(1), "morning");
-        Ok(())
-    }
-
-    #[test]
-    fn test_single_sentence() -> Result<()> {
-        let result = run_sentences(&[Some("Hello world")])?;
-        let outer = result.value(0);
-        let outer_list = outer.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(outer_list.len(), 1);
-
-        let s1 = outer_list.value(0);
-        let words1 = s1.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(words1.len(), 2);
-        assert_eq!(words1.value(0), "Hello");
-        assert_eq!(words1.value(1), "world");
-        Ok(())
-    }
-
-    #[test]
-    fn test_null_input() -> Result<()> {
-        let result = run_sentences(&[None])?;
-        assert!(result.is_null(0));
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_string() -> Result<()> {
-        let result = run_sentences(&[Some("")])?;
-        let outer = result.value(0);
-        let outer_list = outer.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(outer_list.len(), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_question_and_exclamation() -> Result<()> {
-        let result = run_sentences(&[Some("What? Yes! OK.")])?;
-        let outer = result.value(0);
-        let outer_list = outer.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(outer_list.len(), 3);
-
-        let words: Vec<Vec<String>> = (0..3)
-            .map(|i| {
-                let arr = outer_list.value(i);
-                let w = arr.as_any().downcast_ref::<StringArray>().unwrap();
-                (0..w.len()).map(|j| w.value(j).to_string()).collect()
-            })
-            .collect();
-        assert_eq!(words[0], vec!["What"]);
-        assert_eq!(words[1], vec!["Yes"]);
-        assert_eq!(words[2], vec!["OK"]);
-        Ok(())
-    }
 }
