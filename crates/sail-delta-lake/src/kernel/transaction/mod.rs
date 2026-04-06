@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
 use crate::delta_log::{resolve_effective_protocol_and_metadata, resolve_version_timestamp};
-use crate::kernel::checkpoints::create_checkpoint_for;
+use crate::kernel::checkpoints::{
+    create_checkpoint_for, create_log_compaction_for, should_create_compaction,
+};
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
 use crate::spec::{
@@ -1193,10 +1195,13 @@ impl PostCommit {
 
         let mut num_log_files_cleaned_up: u64 = 0;
         if cleanup_logs && new_checkpoint_created {
-            let retention_millis = state
-                .table_properties()
-                .log_retention_duration()
-                .as_millis() as i64;
+            let retention_millis = i64::try_from(
+                state
+                    .table_properties()
+                    .log_retention_duration()
+                    .as_millis(),
+            )
+            .unwrap_or(i64::MAX);
             let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
                 .div_euclid(24 * 60 * 60 * 1000)
                 * (24 * 60 * 60 * 1000);
@@ -1218,6 +1223,35 @@ impl PostCommit {
                     )
                     .await?,
                 );
+            }
+        }
+
+        // Log compaction — independent of checkpoints.
+        if let Some(compaction_interval) = state.table_properties().log_compaction_interval() {
+            if should_create_compaction(self.version, compaction_interval) {
+                let start_version = self.version + 1 - compaction_interval as i64;
+                let retention_millis = i64::try_from(
+                    state
+                        .table_properties()
+                        .deleted_file_retention_duration()
+                        .as_millis(),
+                )
+                .unwrap_or(i64::MAX);
+                let min_file_retention_ts = Utc::now().timestamp_millis() - retention_millis;
+                if let Err(e) = create_log_compaction_for(
+                    start_version,
+                    self.version,
+                    self.log_store.as_ref(),
+                    min_file_retention_ts,
+                )
+                .await
+                {
+                    // Log compaction failure is non-fatal — it is an optimization only.
+                    warn!(
+                        "Failed to create log compaction for versions {} to {}: {}",
+                        start_version, self.version, e
+                    );
+                }
             }
         }
 
@@ -1396,7 +1430,7 @@ mod tests {
     async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, true)?;
+        let protocol = protocol_for_create(false, false, true, &HashMap::new())?;
         let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
 
         let created = CommitBuilder::default()
@@ -1464,7 +1498,7 @@ mod tests {
     async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false)?;
+        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1486,7 +1520,7 @@ mod tests {
             DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
         })?;
 
-        let upgrade_protocol = protocol_for_create(false, false, true)?;
+        let upgrade_protocol = protocol_for_create(false, false, true, &HashMap::new())?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
         let base_actions = CommitData::new(
             vec![
@@ -1587,7 +1621,7 @@ mod tests {
     async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false)?;
+        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1648,7 +1682,7 @@ mod tests {
     async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false)?;
+        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
